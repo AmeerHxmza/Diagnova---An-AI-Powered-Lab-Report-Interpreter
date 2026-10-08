@@ -24,10 +24,10 @@
 ## Slide 4: High-Level Architecture
 **Visual**: The Mermaid diagram from our README.
 **Speaker**: 
-"Technically, Diagnova is 'GenAI-First'. We use Llama 3.3 (70B) for zero-shot clinical NER extraction. We then pass that data through two parallel paths: a deterministic rule engine for medical accuracy, and our proprietary 'Grounded Clinical Intelligence Engine'—a RAG-based system that ensures every explanation is anchored in a validated clinical corpus, virtually eliminating AI hallucinations."
-
+"Technically, Diagnova is 'GenAI-First'. We use OpenAI GPT-4o-mini for fast, token-efficient, zero-shot clinical extraction. We then pass that data through two parallel paths: a deterministic rule engine for medical accuracy, and our proprietary 'Grounded Clinical Intelligence Engine'—a RAG-based system that ensures every explanation is anchored in a validated clinical corpus, virtually eliminating AI hallucinations."
+ 
 ---
-
+ 
 ## Slide 5: GenAI Innovation
 **Visual**: Highlighted features: Clinical AI Engine, Pattern Detection, Multi-Language, Health Coach.
 **Speaker**: 
@@ -35,14 +35,14 @@
 1. **Multi-Parameter Reasoning**: We detect patterns like Anemia or Infection response across multiple markers.
 2. **Personalized Generative Health Coach**: We synthesize your lab results with your lifestyle profile to create a custom wellness roadmap.
 3. **Global Accessibility**: One-click summary translations into 6 major global languages."
-
+ 
 ---
-
+ 
 ## Slide 6: Live Demo Walkthrough
 **Visual**: Screen recording of the app (or live switch).
 **Speaker**: 
 "Let’s look at it in action. [User clicks 'Try Sample Report'] 
-Notice how instantly Llama 3.3 extracts the data. Look at the 'Analysis' tab—our dashboard clearly color-codes risks. 
+Notice how instantly OpenAI GPT-4o-mini extracts the data. Look at the 'Analysis' tab—our dashboard clearly color-codes risks. 
 But here’s the magic: I’ll click 'Chat'. I can ask the AI: 'Why is my Iron low?' [Assistant responds]. 
 This isn't a generic answer; it's grounded in the actual reference ranges and values from *this* specific report. 
 Finally, look at the sidebar—I'll switch the language to Urdu. Instantly, the summary is translated 🧬."

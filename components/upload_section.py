@@ -16,15 +16,17 @@ def render_upload_section():
 
     if input_mode == "📄 Upload File":
         st.markdown("""
-        <p style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.5rem;">
-            Supported:&nbsp;
-            <code style="background:var(--blue-50);color:var(--blue-700);padding:1px 7px;
-                border-radius:4px;border:1px solid var(--border);font-size:0.72rem;">PDF</code>&nbsp;
-            <code style="background:var(--blue-50);color:var(--blue-700);padding:1px 7px;
-                border-radius:4px;border:1px solid var(--border);font-size:0.72rem;">PNG</code>&nbsp;
-            <code style="background:var(--blue-50);color:var(--blue-700);padding:1px 7px;
-                border-radius:4px;border:1px solid var(--border);font-size:0.72rem;">JPG</code>
-        </p>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.6rem;flex-wrap:wrap;gap:6px;">
+            <div style="font-size:0.78rem;color:var(--text-muted);">
+                Supported:&nbsp;
+                <code style="background:var(--blue-50);color:var(--blue-700);padding:2px 7px;border-radius:4px;border:1px solid var(--border);font-size:0.72rem;font-weight:600;">PDF</code>&nbsp;
+                <code style="background:var(--blue-50);color:var(--blue-700);padding:2px 7px;border-radius:4px;border:1px solid var(--border);font-size:0.72rem;font-weight:600;">PNG</code>&nbsp;
+                <code style="background:var(--blue-50);color:var(--blue-700);padding:2px 7px;border-radius:4px;border:1px solid var(--border);font-size:0.72rem;font-weight:600;">JPG</code>
+            </div>
+            <span style="font-size:0.68rem;font-weight:700;color:var(--green);background:var(--green-light);border:1px solid var(--green-border);padding:2px 8px;border-radius:99px;">
+                ⚡ Vision OCR Active
+            </span>
+        </div>
         """, unsafe_allow_html=True)
 
         uploaded_file = st.file_uploader(

@@ -8,15 +8,14 @@ Extracts lab test values from pasted text using LLM and cleans them for analysis
 import json
 import re
 from typing import Dict, Tuple
-import streamlit as st
-from groq import Groq
+from utils.openai_client import get_openai_client, OPENAI_MODEL
 
 
 def call_llm(prompt: str) -> str:
     """
-    Call Groq LLM API to extract structured data from text.
+    Call OpenAI LLM API to extract structured data from text.
     
-    Uses Groq's fast inference with Mixtral model for JSON extraction.
+    Uses OpenAI's cost-effective and token-efficient gpt-4o-mini model.
     Falls back to empty JSON if API call fails.
     
     Args:
@@ -26,34 +25,28 @@ def call_llm(prompt: str) -> str:
         str: LLM response (should be valid JSON)
     """
     try:
-        # Get API key from Streamlit secrets
-        api_key = st.secrets.get("GROQ_API_KEY", "")
-        
-        if not api_key:
-            # No API key - return empty JSON
-            print("⚠️ No GROQ_API_KEY found in secrets - using regex fallback")
+        client = get_openai_client()
+        if not client:
+            print("[WARN] No OPENAI_API_KEY found - using regex fallback")
             return "{}"
         
-        print(f"✅ API key found, calling Groq...")
+        print(f"[OK] OpenAI API key found, calling {OPENAI_MODEL}...")
         
-        # Initialize Groq client
-        client = Groq(api_key=api_key)
-        
-        # Call Groq API
         response = client.chat.completions.create(
-            model="mixtral-8x7b-32768",  # Fast, accurate model
+            model=OPENAI_MODEL,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,  # Low temperature for consistent JSON output
-            max_tokens=2000
+            temperature=0.1,
+            max_tokens=1500,
+            response_format={"type": "json_object"}
         )
         
-        result = response.choices[0].message.content
-        print(f"✅ LLM response received ({len(result)} chars)")
+        result = response.choices[0].message.content or "{}"
+        print(f"[OK] LLM response received ({len(result)} chars)")
         return result
         
     except Exception as e:
         # API call failed - return empty JSON safely
-        print(f"❌ LLM call failed: {str(e)}")
+        print(f"[ERROR] LLM call failed: {str(e)}")
         return "{}"
 
 
@@ -262,28 +255,28 @@ def process_lab_report(text: str) -> dict:
     """
     # Validate input
     if not text or not isinstance(text, str) or not text.strip():
-        print("❌ No valid text provided")
+        print("[INFO] No valid text provided")
         return {}
     
     try:
         text = text.strip()
-        print(f"📝 Processing {len(text)} characters of text...")
+        print(f"[INFO] Processing {len(text)} characters of text...")
         
         # Step 1: Try LLM extraction first
         extracted_data = extract_json_from_llm(text)
         cleaned_data = clean_lab_values(extracted_data)
         
         if cleaned_data:
-            print(f"✅ LLM extraction successful: {len(cleaned_data)} values")
+            print(f"[OK] LLM extraction successful: {len(cleaned_data)} values")
         else:
-            print("⚠️ LLM extraction returned empty, trying regex fallback...")
+            print("[WARN] LLM extraction returned empty, trying regex fallback...")
             # Step 2: If LLM failed, try regex fallback
             fallback_data = regex_fallback_extraction(text)
             cleaned_data = clean_lab_values(fallback_data)
             if cleaned_data:
-                print(f"✅ Regex fallback successful: {len(cleaned_data)} values")
+                print(f"[OK] Regex fallback successful: {len(cleaned_data)} values")
             else:
-                print("❌ Both LLM and regex extraction failed")
+                print("[ERROR] Both LLM and regex extraction failed")
         
         # Step 3: Final validation
         valid_data = {}
@@ -291,10 +284,10 @@ def process_lab_report(text: str) -> dict:
             if isinstance(data, dict) and "value" in data and isinstance(data["value"], float):
                 valid_data[test] = data
         
-        print(f"📊 Final result: {len(valid_data)} valid lab values")
+        print(f"[OK] Final result: {len(valid_data)} valid lab values")
         return valid_data
         
     except Exception as e:
         # Never crash the app
-        print(f"❌ Exception in process_lab_report: {str(e)}")
+        print(f"[ERROR] Exception in process_lab_report: {str(e)}")
         return {}

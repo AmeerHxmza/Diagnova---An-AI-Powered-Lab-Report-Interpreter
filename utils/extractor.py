@@ -1,215 +1,298 @@
 # utils/extractor.py
 
 """
-Lab report text extraction and cleaning module.
-Extracts lab test values from pasted text using LLM and cleans them for analysis.
+Lab report text extraction and clinical entity parsing module.
+Extracts test names, numeric values, measurement units, and laboratory-specific
+reference ranges using OpenAI gpt-4o-mini and deterministic regex fallback.
 """
 
 import json
 import re
-from typing import Dict
-import streamlit as st
-from groq import Groq
+import io
+import base64
+from typing import Dict, List, Any, Optional, Tuple
+from PIL import Image
+
+try:
+    import streamlit as st
+except ImportError:
+    st = None
+
+from utils.openai_client import get_openai_client, OPENAI_MODEL
 
 
-def call_llm(prompt: str) -> str:
+def extract_text_from_image(uploaded_file) -> str:
     """
-    Call Groq LLM API to extract structured data from text.
-    
-    Uses Groq's fast inference with Mixtral model for JSON extraction.
-    Falls back to empty JSON if API call fails.
-    
-    Args:
-        prompt: The prompt to send to the LLM
-        
-    Returns:
-        str: LLM response (should be valid JSON)
+    Extract text from uploaded image (PNG, JPG, JPEG) using OpenAI gpt-4o-mini vision.
+    Token-optimized: downsizes oversized images and compresses before encoding.
     """
     try:
-        # Get API key from Streamlit secrets
-        api_key = st.secrets.get("GROQ_API_KEY", "")
-        
-        if not api_key:
-            # No API key - return empty JSON
-            print("⚠️ No GROQ_API_KEY found in secrets")
-            return "{}"
-        
-        print(f"✅ API key found, calling Groq...")
-        
-        # Initialize Groq client
-        client = Groq(api_key=api_key)
-        
-        # Call Groq API
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,  # Low temperature for consistent JSON output
-            max_tokens=2000
+        client = get_openai_client()
+        if not client:
+            print("[WARN] No OPENAI_API_KEY available for OCR")
+            return ""
+
+        # Read image bytes
+        if hasattr(uploaded_file, "read"):
+            image_bytes = uploaded_file.read()
+            uploaded_file.seek(0)
+        else:
+            image_bytes = uploaded_file
+
+        if not image_bytes:
+            return ""
+
+        # Open and optimize image using PIL to save tokens
+        img = Image.open(io.BytesIO(image_bytes))
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+
+        # Limit maximum dimension to 1600px to optimize vision token usage
+        max_dim = 1600
+        if max(img.size) > max_dim:
+            img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+
+        # Compress to JPEG
+        buffer = io.BytesIO()
+        img.save(buffer, format="JPEG", quality=85, optimize=True)
+        b64_image = base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+        prompt = (
+            "You are an expert clinical document OCR engine.\n"
+            "Transcribe ALL text, lab test names, numeric values, units, and reference ranges "
+            "visible in this lab report image verbatim.\n"
+            "Do NOT summarize, comment, or omit anything. Output all transcribed text clearly."
         )
-        
-        result = response.choices[0].message.content
-        print(f"✅ LLM response received ({len(result)} chars)")
-        return result
-        
+
+        response = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{b64_image}",
+                                "detail": "high"
+                            }
+                        }
+                    ]
+                }
+            ],
+            max_tokens=1500,
+            temperature=0.0
+        )
+
+        extracted_text = response.choices[0].message.content or ""
+        print(f"[OK] OCR transcribed {len(extracted_text)} characters from image")
+        return extracted_text.strip()
+
     except Exception as e:
-        # API call failed - return empty JSON safely
-        print(f"❌ LLM call failed: {str(e)}")
-        return "{}"
+        print(f"[ERROR] OCR Extraction failed: {str(e)}")
+        return ""
 
 
-def extract_json_from_llm(text: str) -> dict:
+def call_llm(prompt: str, json_mode: bool = False) -> str:
     """
-    Extract lab values from raw report text using LLM.
-    
-    Args:
-        text: Raw lab report text from user input
-        
-    Returns:
-        dict: Extracted lab values (may need cleaning), empty dict on failure
+    Call OpenAI LLM API to extract structured data from text.
     """
-    # Build prompt for LLM
-    prompt = f"""Extract all lab test names and their numeric values from the following lab report.
+    try:
+        client = get_openai_client()
+        if not client:
+            print("[WARN] No OPENAI_API_KEY found")
+            return "{}" if json_mode else ""
 
-Return ONLY valid JSON in this exact format:
+        kwargs = {
+            "model": OPENAI_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.0,  # Zero temperature for deterministic extraction
+            "max_tokens": 1500,
+        }
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+
+        response = client.chat.completions.create(**kwargs)
+        result = response.choices[0].message.content or ""
+        return result
+
+    except Exception as e:
+        print(f"[ERROR] OpenAI LLM call failed: {str(e)}")
+        return "{}" if json_mode else ""
+
+
+def extract_parameters_from_llm(text: str) -> dict:
+    """
+    Extract structured lab parameters (name, value, unit, reference range) from raw text.
+    """
+    prompt = f"""You are a clinical laboratory data extraction engine.
+Extract ALL test parameters from the following lab report.
+
+For each parameter, extract:
+1. "name": The clean standard medical test name (e.g. "White Blood Cell Count (WBC)", "Hemoglobin", "Platelets", "RBC Count", "Neutrophils").
+2. "value": The numeric value as a number (e.g. 7.65, 14.2, 250, 4.8). If formatted with commas (e.g. 7,650), convert to number (7650).
+3. "unit": The exact unit of measurement stated on the report line (e.g. "10^3/uL", "10^6/uL", "g/dL", "%", "fL", "pg", "/uL", "mg/dL"). If no unit is provided, use "".
+4. "reference_range": The reference or normal range string printed by the lab (e.g. "4.5 - 11.0", "13.5 - 17.5", "< 200", "4,500 - 11,000"). If not provided in the report, use null.
+
+Return ONLY valid JSON in this exact structure:
 {{
-  "Test Name": numeric_value,
-  "Another Test": numeric_value
+  "parameters": [
+    {{
+      "name": "WBC Count",
+      "value": 7.65,
+      "unit": "10^3/uL",
+      "reference_range": "4.5 - 11.0"
+    }}
+  ]
 }}
-
-Rules:
-- Use standard medical test names (e.g., "Hemoglobin", "WBC Count", "Glucose")
-- Extract ONLY the numeric value, ignore units
-- Do NOT include any explanations, markdown, or extra text
-- Return ONLY the JSON object
 
 Lab Report Text:
 {text}
-
-JSON Output:"""
+"""
 
     try:
-        # Call LLM
-        llm_response = call_llm(prompt)
+        llm_response = call_llm(prompt, json_mode=True)
         cleaned = llm_response.strip()
-        
-        # Remove markdown code blocks if present
+
         if "```" in cleaned:
-            # Extract content between first { and last }
             start = cleaned.find("{")
             end = cleaned.rfind("}")
             if start != -1 and end != -1 and end > start:
                 cleaned = cleaned[start:end+1]
-        
-        # Parse JSON
+
         data = json.loads(cleaned)
-        
-        # Ensure it's a dict
         return data if isinstance(data, dict) else {}
-        
-    except:
-        # Any error - return empty dict safely
+
+    except Exception as e:
+        print(f"[ERROR] JSON extraction failed: {str(e)}")
         return {}
 
 
-def clean_lab_values(data: dict) -> dict:
+def clean_and_normalize_extracted(raw_json: dict) -> Tuple[Dict[str, float], List[Dict[str, Any]]]:
     """
-    Clean extracted lab values to ensure Dict[str, float] format.
-    
-    Converts all values to float, removes units, handles nested dicts.
-    Skips any value that cannot be converted to float.
-    
-    Args:
-        data: Dictionary from LLM (may contain units, strings, nested objects)
-        
-    Returns:
-        dict: Clean dictionary with format {test_name: float_value}
-              GUARANTEED to only contain float values
+    Cleans raw extraction JSON into:
+    1. data: Dict[str, float] for legacy backward compatibility.
+    2. parameters: List[Dict[str, Any]] with name, value, unit, reference_range.
     """
-    cleaned = {}
-    
-    for key, val in data.items():
-        try:
-            # Skip None or empty
-            if val is None or val == "":
+    data: Dict[str, float] = {}
+    parameters: List[Dict[str, Any]] = []
+
+    # Format 1: {"parameters": [...]}
+    if "parameters" in raw_json and isinstance(raw_json["parameters"], list):
+        for item in raw_json["parameters"]:
+            if not isinstance(item, dict):
                 continue
-            
-            # Handle nested dict - extract 'value' key if present
-            if isinstance(val, dict):
-                val = val.get("value")
-                if val is None:
-                    continue
-            
-            # If already numeric, convert directly
+            name = str(item.get("name", "")).strip()
+            raw_val = item.get("value")
+            unit = str(item.get("unit", "")).strip()
+            ref_range = item.get("reference_range")
+            if ref_range is not None:
+                ref_range = str(ref_range).strip()
+
+            if not name or raw_val is None:
+                continue
+
+            # Convert value to float
+            num_val = None
+            if isinstance(raw_val, (int, float)):
+                num_val = float(raw_val)
+            else:
+                v_str = str(raw_val).replace("<", "").replace(">", "").replace(",", "").strip()
+                m = re.search(r'-?\d+\.?\d*', v_str)
+                if m:
+                    num_val = float(m.group(0))
+
+            if num_val is not None:
+                data[name] = num_val
+                parameters.append({
+                    "name": name,
+                    "value": num_val,
+                    "unit": unit,
+                    "reference_range": ref_range
+                })
+
+    # Format 2: Flat dictionary {"Test Name": value}
+    elif raw_json and isinstance(raw_json, dict):
+        for key, val in raw_json.items():
+            if key == "parameters" or val is None:
+                continue
+            num_val = None
             if isinstance(val, (int, float)):
-                cleaned[key] = float(val)
-                continue
-            
-            # String processing - extract first number found
-            # Remove symbols and commas first
-            val_str = str(val).replace("<", "").replace(">", "").replace(",", "")
-            
-            # Extract number (handles negative, decimal)
-            match = re.search(r'-?\d+\.?\d*', val_str)
-            
-            if match:
-                # Convert to float - this is the ONLY place we add to cleaned dict
-                # Guarantees all values are float
-                cleaned[key] = float(match.group(0))
-        
-        except:
-            # Skip any value that fails conversion
+                num_val = float(val)
+            elif isinstance(val, dict):
+                raw_v = val.get("value")
+                if isinstance(raw_v, (int, float)):
+                    num_val = float(raw_v)
+                elif raw_v:
+                    m = re.search(r'-?\d+\.?\d*', str(raw_v).replace(",", ""))
+                    if m:
+                        num_val = float(m.group(0))
+            elif isinstance(val, str):
+                m = re.search(r'-?\d+\.?\d*', val.replace(",", ""))
+                if m:
+                    num_val = float(m.group(0))
+
+            if num_val is not None:
+                data[str(key).strip()] = num_val
+                parameters.append({
+                    "name": str(key).strip(),
+                    "value": num_val,
+                    "unit": "",
+                    "reference_range": None
+                })
+
+    return data, parameters
+
+
+def regex_fallback_extraction(text: str) -> Tuple[Dict[str, float], List[Dict[str, Any]]]:
+    """
+    Robust regex-based fallback extraction when LLM fails or is unavailable.
+    Extracts name, numeric value, unit, and optional reference range.
+    """
+    data: Dict[str, float] = {}
+    parameters: List[Dict[str, Any]] = []
+
+    lines = text.strip().split('\n')
+    for line in lines:
+        line_clean = line.strip()
+        if not line_clean or len(line_clean) < 3:
             continue
-    
-    return cleaned
 
+        # Pattern: Test Name [:=-] Value [Unit] [(Ref: Min-Max)]
+        # Example: "WBC Count: 7.65 10^3/uL (Ref: 4.5 - 11.0)"
+        pattern = r'^([A-Za-z\s/%()-]+?)[\s:=-]+([0-9,.]+)\s*([A-Za-z/%µ0-9^*\-]*)(?:[\s([<{]*?(?:ref|reference|range|normal)?[\s:=-]*([0-9.,]+\s*(?:-|–|—|to)\s*[0-9.,]+|[<≤>≥]\s*[0-9.,]+))?'
+        m = re.match(pattern, line_clean, re.IGNORECASE)
+        if m:
+            test_name = m.group(1).strip()
+            val_str = m.group(2).replace(",", "").strip()
+            unit_str = (m.group(3) or "").strip()
+            range_str = (m.group(4) or "").strip() or None
 
-def regex_fallback_extraction(text: str) -> dict:
-    """
-    Simple regex-based fallback extraction when LLM fails.
-    
-    Extracts patterns like:
-    - Hemoglobin: 9.8
-    - WBC 12000
-    - MCV - 70
-    
-    Args:
-        text: Raw lab report text
-        
-    Returns:
-        dict: Extracted values {test_name: value_string}
-    """
-    results = {}
-    
-    try:
-        # Split into lines
-        lines = text.strip().split('\n')
-        
-        for line in lines:
-            # Pattern: Word(s) followed by separator (:, -, or space) then number
-            # Matches: "Hemoglobin: 9.8" or "WBC 12000" or "MCV - 70"
-            match = re.match(r'([A-Za-z\s]+?)[\s:=-]+([0-9,.<>]+(?:\s*[A-Za-z/μ°%]+)?)', line.strip())
-            
-            if match:
-                test_name = match.group(1).strip()
-                value = match.group(2).strip()
-                
-                # Only keep if test name looks reasonable (2-30 chars)
-                if 2 <= len(test_name) <= 30:
-                    results[test_name] = value
-    
-    except:
-        pass
-    
-    return results
+            try:
+                num_val = float(val_str)
+                if 2 <= len(test_name) <= 40:
+                    data[test_name] = num_val
+                    parameters.append({
+                        "name": test_name,
+                        "value": num_val,
+                        "unit": unit_str,
+                        "reference_range": range_str
+                    })
+            except ValueError:
+                continue
+
+    return data, parameters
 
 
 def process_lab_report(text: str) -> dict:
     """
-    Main function to process raw lab report text into clean lab values.
-    
+    Main function to process raw lab report text into structured lab data.
+
     Returns:
         dict: {
             "data": Dict[str, float],
+            "parameters": List[Dict[str, Any]],
             "metadata": {
                 "extraction_method": "llm" | "regex" | "failed",
                 "raw_count": int
@@ -218,34 +301,38 @@ def process_lab_report(text: str) -> dict:
     """
     result_package = {
         "data": {},
+        "parameters": [],
         "metadata": {"extraction_method": "failed", "raw_count": 0}
     }
 
     if not text or not isinstance(text, str) or not text.strip():
         return result_package
-    
+
     try:
         text = text.strip()
-        
+
         # Step 1: Try LLM extraction first
-        extracted_data = extract_json_from_llm(text)
-        cleaned_data = clean_lab_values(extracted_data)
-        
-        if cleaned_data:
-            result_package["data"] = cleaned_data
+        raw_llm = extract_parameters_from_llm(text)
+        data, parameters = clean_and_normalize_extracted(raw_llm)
+
+        if parameters:
+            result_package["data"] = data
+            result_package["parameters"] = parameters
             result_package["metadata"]["extraction_method"] = "llm"
-            result_package["metadata"]["raw_count"] = len(cleaned_data)
+            result_package["metadata"]["raw_count"] = len(parameters)
+            print(f"[OK] LLM extracted {len(parameters)} structured parameters")
         else:
-            # Step 2: If LLM failed, try regex fallback
-            fallback_data = regex_fallback_extraction(text)
-            cleaned_data = clean_lab_values(fallback_data)
-            if cleaned_data:
-                result_package["data"] = cleaned_data
+            # Step 2: Fallback to Regex extraction
+            data, parameters = regex_fallback_extraction(text)
+            if parameters:
+                result_package["data"] = data
+                result_package["parameters"] = parameters
                 result_package["metadata"]["extraction_method"] = "regex"
-                result_package["metadata"]["raw_count"] = len(cleaned_data)
-        
+                result_package["metadata"]["raw_count"] = len(parameters)
+                print(f"[OK] Regex fallback extracted {len(parameters)} parameters")
+
         return result_package
-        
+
     except Exception as e:
-        print(f"❌ Exception in process_lab_report: {str(e)}")
+        print(f"[ERROR] Exception in process_lab_report: {str(e)}")
         return result_package

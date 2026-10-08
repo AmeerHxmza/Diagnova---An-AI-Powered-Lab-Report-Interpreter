@@ -5,33 +5,8 @@ import time
 import fitz  # PyMuPDF
 from PIL import Image
 import io
-from utils.extractor import process_lab_report
+from utils.extractor import process_lab_report, extract_text_from_image
 from utils.analyzer import process_lab_results
-
-
-def extract_text_from_pdf(uploaded_file):
-    """Extract text from uploaded PDF file."""
-    try:
-        pdf_bytes = uploaded_file.read()
-        uploaded_file.seek(0)
-        pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
-        
-        text = ""
-        for page_num in range(pdf_document.page_count):
-            page = pdf_document[page_num]
-            text += page.get_text()
-        
-        pdf_document.close()
-        return text.strip()
-    except Exception as e:
-        print(f"❌ PDF extraction failed: {str(e)}")
-        return ""
-
-
-def extract_text_from_image(uploaded_file):
-    """Extract text from uploaded image file using OCR."""
-    st.warning("⚠️ Image OCR not yet implemented. Please use PDF or paste text.")
-    return ""
 
 
 def _status_label(status: str) -> str:
@@ -110,24 +85,24 @@ def render_result_dashboard():
             uploaded_file = st.session_state.get("uploaded_file", None)
             if uploaded_file is not None:
                 file_type = uploaded_file.type
-                print(f"📁 Processing uploaded file: {uploaded_file.name} (type: {file_type})")
+                print(f"[INFO] Processing uploaded file: {uploaded_file.name} (type: {file_type})")
                 
                 if file_type == "application/pdf":
                     text = extract_text_from_pdf(uploaded_file)
                     if text:
-                        print(f"✅ Extracted {len(text)} characters from PDF")
+                        print(f"[OK] Extracted {len(text)} characters from PDF")
                     else:
-                        st.error("❌ Could not extract text from PDF. Please try pasting text instead.")
+                        st.error("Could not extract text from PDF. Please try pasting text instead.")
                 elif file_type in ["image/png", "image/jpeg", "image/jpg"]:
                     text = extract_text_from_image(uploaded_file)
                 else:
-                    st.error(f"❌ Unsupported file type: {file_type}")
+                    st.error(f"Unsupported file type: {file_type}")
             
             # Fall back to pasted text if no file or extraction failed
             if not text:
                 text = st.session_state.get("pasted_text", "")
                 if text:
-                    print(f"📝 Using pasted text ({len(text)} characters)")
+                    print(f"[INFO] Using pasted text ({len(text)} characters)")
             
             if text:
                 try:
@@ -150,7 +125,7 @@ def render_result_dashboard():
                         st.session_state["analysis_patterns"] = analysis["patterns"]
                         st.session_state["analysis_counts"] = analysis["counts"]
                         
-                        print(f"✅ Analysis complete: {len(analysis['results'])} results")
+                        print(f"[OK] Analysis complete: {len(analysis['results'])} results")
                     else:
                         st.warning("⚠️ No lab values could be extracted. Please try:\n\n"
                                  "• Using simple format: `Test Name: Value`\n"

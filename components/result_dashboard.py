@@ -3,7 +3,7 @@ import time
 import fitz  # PyMuPDF
 from PIL import Image
 import io
-from utils.extractor import process_lab_report
+from utils.extractor import process_lab_report, extract_text_from_image
 from utils.analyzer import process_lab_results
 from utils.chat_handler import get_chat_response
 
@@ -68,39 +68,120 @@ SAMPLE_ANALYSIS = {
 
 
 def _status_label(status: str) -> str:
-    return {"green": "Normal", "yellow": "Borderline", "red": "Abnormal"}.get(status, "")
+    return {"green": "Normal", "yellow": "Borderline", "red": "Abnormal", "gray": "Not Evaluated"}.get(status, "Not Evaluated")
+
+
+def _render_single_card(r: dict):
+    s   = r.get("status", "green")
+    lbl = r.get("label") or _status_label(s)
+    val = f"{r['value']:,}" if isinstance(r["value"], int) else str(r["value"])
+    unit_str = r.get("unit", "")
+    ref_str = r.get("reference", "Not Available")
+    explanation = r.get("explanation", "")
+    bar_pct = r.get("bar_pct", 50)
+
+    st.markdown(f"""
+    <div class="result-card {s}">
+        <div class="rc-header">
+            <span class="rc-name">{r['name']}</span>
+            <span class="rc-badge badge-{s}">{lbl}</span>
+        </div>
+        <div class="rc-value {s}">{val}</div>
+        <div class="rc-unit">{unit_str}</div>
+        <div class="rc-range">Reference: {ref_str}</div>
+        <div class="rc-bar-track">
+            <div class="rc-bar-fill {s}" style="width:{bar_pct}%;"></div>
+        </div>
+        <div class="rc-explanation">{explanation}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
 
 def _render_chat_assistant(context: dict):
-    """RENDER FEATURE 1: AI Chat Assistant"""
-    st.markdown('<div class="section-label" style="margin-top:1.5rem;">💬 Ask Diagnova AI</div>', unsafe_allow_html=True)
-    
+    """RENDER FEATURE 1: AI Chat Assistant with professional header, chips, and high-contrast messages"""
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
+    if "pending_chat_prompt" not in st.session_state:
+        st.session_state.pending_chat_prompt = None
 
-    # Display chat history
-    chat_container = st.container(height=350)
+    # Header Card
+    col_hdr, col_btn = st.columns([3, 1])
+    with col_hdr:
+        st.markdown("""
+        <div class="chat-header-card">
+            <div class="chat-title-group">
+                <div class="chat-bot-avatar">🤖</div>
+                <div>
+                    <div class="chat-name">Diagnova Clinical Assistant</div>
+                    <div class="chat-subtext">OpenAI GPT-4o-mini · Grounded in your lab report</div>
+                </div>
+            </div>
+            <div class="chat-status-pill">
+                <span>●</span> Online & Ready
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col_btn:
+        if st.session_state.chat_history:
+            if st.button("🔄 Reset Chat", key="reset_chat_btn", use_container_width=True):
+                st.session_state.chat_history = []
+                st.session_state.pending_chat_prompt = None
+                st.rerun()
+
+    # Empty State with Suggested Questions
+    if not st.session_state.chat_history:
+        st.markdown("""
+        <div class="chat-empty-card">
+            <div class="chat-empty-icon">🩺</div>
+            <div class="chat-empty-title">Ask anything about your lab report</div>
+            <div class="chat-empty-desc">
+                Get clear, patient-friendly explanations for abnormal markers, reference ranges, and lifestyle advice.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown("<p style='font-size:0.75rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.5rem;'>💡 Suggested Questions</p>", unsafe_allow_html=True)
+        col_c1, col_c2 = st.columns(2)
+        with col_c1:
+            if st.button("🩸 What do my abnormal results mean?", key="chip_abnormal", use_container_width=True):
+                st.session_state.pending_chat_prompt = "What do my abnormal and borderline results indicate, and should I be concerned?"
+            if st.button("🥗 What diet changes are recommended?", key="chip_diet", use_container_width=True):
+                st.session_state.pending_chat_prompt = "Based on my lab results, what dietary changes or nutritional foods should I focus on?"
+        with col_c2:
+            if st.button("👨‍⚕️ What should I ask my doctor?", key="chip_doctor", use_container_width=True):
+                st.session_state.pending_chat_prompt = "What are the most important questions I should ask my physician about these results?"
+            if st.button("🔍 Explain my overall health summary", key="chip_summary", use_container_width=True):
+                st.session_state.pending_chat_prompt = "Can you give me a simple, reassuring breakdown of my lab report results?"
+
+    # Display Chat History Container
+    chat_container = st.container(height=380)
     with chat_container:
         for message in st.session_state.chat_history:
-            with st.chat_message(message["role"]):
+            role = message["role"]
+            avatar = "👤" if role == "user" else "🧬"
+            with st.chat_message(role, avatar=avatar):
                 st.markdown(message["content"])
 
-    # Chat input
-    if prompt := st.chat_input("Ask about your results..."):
-        # Make sure we stay on the chat tab
-        st.session_state.active_tab = "💬 Chat"
-        
+    # Handle Input from typing or from suggestion chips
+    prompt_input = st.chat_input("Type your health question (e.g., 'What does my Hemoglobin mean?')...")
+    active_prompt = prompt_input or st.session_state.get("pending_chat_prompt")
+
+    if active_prompt:
+        st.session_state.active_tab = "💬 Chat Assistant"
+        st.session_state.pending_chat_prompt = None
+
         with chat_container:
-            with st.chat_message("user"):
-                st.markdown(prompt)
-        
-        st.session_state.chat_history.append({"role": "user", "content": prompt})
-        
-        with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
-                response = get_chat_response(st.session_state.chat_history, context)
-                st.markdown(response)
-        
+            with st.chat_message("user", avatar="👤"):
+                st.markdown(active_prompt)
+
+        st.session_state.chat_history.append({"role": "user", "content": active_prompt})
+
+        with chat_container:
+            with st.chat_message("assistant", avatar="🧬"):
+                with st.spinner("Analyzing your report context..."):
+                    response = get_chat_response(st.session_state.chat_history, context)
+                    st.markdown(response)
+
         st.session_state.chat_history.append({"role": "assistant", "content": response})
         st.rerun()
 
@@ -157,10 +238,6 @@ def extract_text_from_pdf(uploaded_file):
         return ""
 
 
-def extract_text_from_image(uploaded_file):
-    """Placeholder for OCR."""
-    st.warning("⚠️ Image OCR not yet implemented. Please use PDF or paste text.")
-    return ""
 
 
 def render_result_dashboard():
@@ -242,9 +319,10 @@ def render_result_dashboard():
     summary = analysis["summary"]
     confidence = analysis["confidence"]
 
-    counts = {"green": 0, "yellow": 0, "red": 0}
+    counts = {"green": 0, "yellow": 0, "red": 0, "gray": 0}
     for r in results:
-        counts[r["status"]] += 1
+        st_val = r.get("status", "green")
+        counts[st_val] = counts.get(st_val, 0) + 1
 
     # Header with toggle for Persistence
     conf_color = {"High": "#00a67e", "Medium": "#c97800", "Low": "#d93025"}.get(confidence, "#6b8dae")
@@ -278,7 +356,7 @@ def render_result_dashboard():
     </style>
     """, unsafe_allow_html=True)
 
-    tab_options = ["📋 Analysis", "🥗 Plan", "💬 Chat"]
+    tab_options = ["📋 Analysis", "🥗 Health Plan", "💬 Chat Assistant"]
     active_index = tab_options.index(st.session_state.active_tab) if st.session_state.active_tab in tab_options else 0
     
     st.session_state.active_tab = st.radio(
@@ -292,11 +370,18 @@ def render_result_dashboard():
     st.markdown("<div style='height:1.5rem'></div>", unsafe_allow_html=True)
 
     if st.session_state.active_tab == "📋 Analysis":
-        # Stats
-        c1, c2, c3 = st.columns(3)
-        with c1: st.markdown(f'<div class="stat-chip green"><span class="stat-chip-num">{counts["green"]}</span><span class="stat-chip-lbl">✅ Normal</span></div>', unsafe_allow_html=True)
-        with c2: st.markdown(f'<div class="stat-chip yellow"><span class="stat-chip-num">{counts["yellow"]}</span><span class="stat-chip-lbl">⚠️ Borderline</span></div>', unsafe_allow_html=True)
-        with c3: st.markdown(f'<div class="stat-chip red"><span class="stat-chip-num">{counts["red"]}</span><span class="stat-chip-lbl">🚨 Abnormal</span></div>', unsafe_allow_html=True)
+        # Stats Chips
+        if counts["gray"] > 0:
+            c1, c2, c3, c4 = st.columns(4)
+            with c1: st.markdown(f'<div class="stat-chip green"><span class="stat-chip-num">{counts["green"]}</span><span class="stat-chip-lbl">✅ Normal</span></div>', unsafe_allow_html=True)
+            with c2: st.markdown(f'<div class="stat-chip yellow"><span class="stat-chip-num">{counts["yellow"]}</span><span class="stat-chip-lbl">⚠️ Borderline</span></div>', unsafe_allow_html=True)
+            with c3: st.markdown(f'<div class="stat-chip red"><span class="stat-chip-num">{counts["red"]}</span><span class="stat-chip-lbl">🚨 Abnormal</span></div>', unsafe_allow_html=True)
+            with c4: st.markdown(f'<div class="stat-chip gray"><span class="stat-chip-num">{counts["gray"]}</span><span class="stat-chip-lbl">⚪ Not Evaluated</span></div>', unsafe_allow_html=True)
+        else:
+            c1, c2, c3 = st.columns(3)
+            with c1: st.markdown(f'<div class="stat-chip green"><span class="stat-chip-num">{counts["green"]}</span><span class="stat-chip-lbl">✅ Normal</span></div>', unsafe_allow_html=True)
+            with c2: st.markdown(f'<div class="stat-chip yellow"><span class="stat-chip-num">{counts["yellow"]}</span><span class="stat-chip-lbl">⚠️ Borderline</span></div>', unsafe_allow_html=True)
+            with c3: st.markdown(f'<div class="stat-chip red"><span class="stat-chip-num">{counts["red"]}</span><span class="stat-chip-lbl">🚨 Abnormal</span></div>', unsafe_allow_html=True)
 
         if patterns:
             st.markdown('<div class="section-label" style="margin-top:1.5rem;">🔍 Clinical Patterns</div>', unsafe_allow_html=True)
@@ -320,14 +405,14 @@ def render_result_dashboard():
         </div>
         """, unsafe_allow_html=True)
 
-    elif st.session_state.active_tab == "🥗 Plan":
+    elif st.session_state.active_tab == "🥗 Health Plan":
         st.markdown('<div class="section-label">🥗 Personalized Health Coach</div>', unsafe_allow_html=True)
         if "health_plan" in analysis:
             st.markdown(analysis["health_plan"])
         else:
             st.info("Complete analysis to see your plan.")
 
-    elif st.session_state.active_tab == "💬 Chat":
+    elif st.session_state.active_tab == "💬 Chat Assistant":
         _render_chat_assistant(analysis)
 
     # Footer Actions
@@ -337,12 +422,37 @@ def render_result_dashboard():
     with col1:
         st.markdown('<div class="section-label" style="margin:0;">📋 Next Steps</div>', unsafe_allow_html=True)
         next_steps = []
-        if counts["red"] > 0:
-            next_steps.append({"tag": "urgent", "icon": "🚨", "text": "Consult a physician immediately regarding abnormal values."})
+        has_critical = analysis.get("has_critical", False) or any(r.get("is_critical", False) for r in results)
+
+        if has_critical:
+            crit_names = [r["name"] for r in results if r.get("is_critical")]
+            next_steps.append({
+                "tag": "urgent",
+                "icon": "🚨",
+                "text": f"CRITICAL CLINICAL ALERT: One or more parameters ({', '.join(crit_names) if crit_names else 'critical tests'}) reached emergency clinical thresholds. Seek immediate physician consultation."
+            })
+        elif counts["red"] > 0:
+            abnormal_names = [r["name"] for r in results if r.get("status") == "red"]
+            next_steps.append({
+                "tag": "consult",
+                "icon": "⚠️",
+                "text": f"Follow up with your healthcare provider to discuss out-of-range parameters ({', '.join(abnormal_names[:3])}{'...' if len(abnormal_names) > 3 else ''})."
+            })
+
         if counts["yellow"] > 0:
-            next_steps.append({"tag": "consult", "icon": "⚠️", "text": "Monitor borderline parameters."})
-        if not next_steps:
-            next_steps.append({"tag": "monitor", "icon": "✅", "text": "Maintain healthy lifestyle."})
+            borderline_names = [r["name"] for r in results if r.get("status") == "yellow"]
+            next_steps.append({
+                "tag": "consult",
+                "icon": "🔍",
+                "text": f"Monitor borderline parameters ({', '.join(borderline_names[:3])}) during routine follow-up."
+            })
+
+        if not has_critical and counts["red"] == 0 and counts["yellow"] == 0:
+            next_steps.append({
+                "tag": "monitor",
+                "icon": "✅",
+                "text": "All evaluated parameters are within healthy normal reference ranges. Maintain your healthy lifestyle and routine wellness visits."
+            })
 
         for step in next_steps:
             st.markdown(f"""<div class="next-step-item"><span>{step['icon']}</span><div style="margin-left:8px;"><span class="step-tag tag-{step['tag']}">{step['tag'].upper()}</span><div class="step-text" style="font-size:0.8rem;">{step['text']}</div></div></div>""", unsafe_allow_html=True)

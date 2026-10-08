@@ -4,6 +4,8 @@ Tests system behavior with problematic inputs
 """
 
 import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 import json
 
 # Mock streamlit secrets for testing
