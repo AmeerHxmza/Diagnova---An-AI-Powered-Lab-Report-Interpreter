@@ -1,0 +1,30 @@
+{
+    "report_id": "DIAG-2026-001",
+    "patient_summary": {
+        "narrative": "Your results show markers consistent with mild microcytic anemia...",
+        "language": "English",
+        "timestamp": "2026-02-22T19:15:00Z"
+    },
+    "clinical_analysis": {
+        "risk_level": "Abnormal",
+        "detected_patterns": [
+            "Iron Deficiency Anemia"
+        ],
+        "confidence_metrics": {
+            "overall_score": 0.94,
+            "label": "High",
+            "factors": {
+                "extraction_stability": "0.98",
+                "parameter_completeness": "0.85 (Complete CBC Panel)",
+                "pattern_relevance": "0.99 (Hemoglobin + MCV Correlation)"
+            }
+        }
+    },
+    "grounding_metadata": {
+        "engine": "Grounded Clinical Intelligence Engine",
+        "sources_retrieved": [
+            "WHO Hemoglobin Guidelines",
+            "Clinical Laboratory Standards Institute"
+        ]
+    }
+}
